@@ -1,8 +1,51 @@
+<div align="center">
+
 # RiskFlow
 
 **A payment-risk ELT platform demonstrating production data engineering practices on Adyen-style transaction data.**
 
-> Built with Airflow, PySpark, Kafka, dbt, PostgreSQL, Docker, Pytest, and Great Expectations.
+![Status](https://img.shields.io/badge/status-in_development-yellow?style=for-the-badge)
+![Target](https://img.shields.io/badge/target-Adyen_Data_Engineer-0abf53?style=for-the-badge)
+![Ship Date](https://img.shields.io/badge/ship_date-Jun_1_2026-blue?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-lightgrey?style=for-the-badge)
+
+---
+
+### Built with
+
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)
+![Apache Spark](https://img.shields.io/badge/Apache_Spark-3.5-E25A1C?style=flat-square&logo=apachespark&logoColor=white)
+![Apache Airflow](https://img.shields.io/badge/Apache_Airflow-2.x-017CEE?style=flat-square&logo=apacheairflow&logoColor=white)
+![Apache Kafka](https://img.shields.io/badge/Apache_Kafka-3.x-231F20?style=flat-square&logo=apachekafka&logoColor=white)
+![dbt](https://img.shields.io/badge/dbt-1.x-FF694B?style=flat-square&logo=dbt&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)
+
+### Quality & testing
+
+![Pytest](https://img.shields.io/badge/pytest-≥80%25_coverage-0A9EDC?style=flat-square&logo=pytest&logoColor=white)
+![Great Expectations](https://img.shields.io/badge/Great_Expectations-data_quality-FF6310?style=flat-square)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI-2088FF?style=flat-square&logo=githubactions&logoColor=white)
+![Pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?style=flat-square&logo=precommit&logoColor=white)
+
+</div>
+
+---
+
+## Table of Contents
+
+1. [Problem Statement](#1-problem-statement)
+2. [Why this project is relevant to payment / risk data engineering](#2-why-this-project-is-relevant-to-payment--risk-data-engineering)
+3. [Architecture](#3-architecture)
+4. [Data Layers](#4-data-layers)
+5. [Orchestration Design](#5-orchestration-design)
+6. [Data Quality Strategy](#6-data-quality-strategy)
+7. [Testing Strategy](#7-testing-strategy)
+8. [Performance Optimization](#8-performance-optimization)
+9. [Monitoring / SLA](#9-monitoring--sla)
+10. [How to Run Locally](#10-how-to-run-locally)
+11. [Future Improvements](#11-future-improvements)
 
 ---
 
@@ -18,7 +61,7 @@ RiskFlow simulates the data-platform layer of a payments company: it ingests tra
 
 ---
 
-## 2. Why This Project Is Relevant to Payment / Risk Data Engineering
+## 2. Why this project is relevant to payment / risk data engineering
 
 Adyen's data teams (Protect, Platform Risk, Identity & Risk Intelligence, Compliance Data, Transaction & Ledger Platform, Authorization Optimisation) all share a common substrate: high-volume transactional events that must flow through reliable, observable, performant pipelines into both analytical stores and ML feature layers.
 
@@ -312,8 +355,16 @@ What this project deliberately does not include, and what shipping it would requ
 
 ---
 
-## Author
+<div align="center">
 
-Kıvanç Filizci — [LinkedIn](https://linkedin.com/in/kivancfilizci) · [GitHub](https://github.com/kivancfk)
+### Author
 
-Built April–June 2026 as a portfolio project for data-engineering roles in payments and fintech.
+**Kıvanç Filizci**
+
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-kivancfilizci-0A66C2?style=flat-square&logo=linkedin&logoColor=white)](https://linkedin.com/in/kivancfilizci)
+[![GitHub](https://img.shields.io/badge/GitHub-kivancfk-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/kivancfk)
+[![HackerRank](https://img.shields.io/badge/HackerRank-kivancfk-2EC866?style=flat-square&logo=hackerrank&logoColor=white)](https://hackerrank.com/kivancfk)
+
+*Built April–June 2026 as a portfolio project for data-engineering roles in payments and fintech.*
+
+</div>
