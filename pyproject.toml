@@ -1,0 +1,66 @@
+[project]
+name = "riskflow"
+version = "0.1.0"
+description = "Payment-risk ELT platform demonstrating production data engineering practices."
+authors = [{ name = "Kıvanç Filizci", email = "kivancfk@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Local dev dependencies — most heavy lifting happens inside Docker.
+# This file exists primarily for editor IntelliSense, pre-commit, and
+# running tests on the host without the container layer.
+dependencies = [
+    "pyspark==3.5.1",
+    "pandas==2.2.3",
+    "great-expectations==0.18.19",
+    "kafka-python==2.0.2",
+    "psycopg2-binary>=2.9.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4.0",
+    "pre-commit>=3.7",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enable: pyflakes, pycodestyle, isort, bugbear, simplify, naming
+select = ["E", "F", "I", "B", "SIM", "N"]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["N802", "N803"]  # test names can be loose
+"airflow/dags/**/*.py" = ["E402"]   # DAG files often import after sys.path fiddling
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--cov=transformations",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+markers = [
+    "unit: pure-function tests, no external services",
+    "integration: tests that require Docker services running",
+    "slow: tests taking >5 seconds",
+]
+
+[tool.coverage.run]
+source = ["transformations"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
