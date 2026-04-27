@@ -1,0 +1,66 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.ruff_cache/
+
+# ---- IDE / editors ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ---- Local notes / scratchpad ----
+cli.md
+
+# ---- Data: never commit raw or generated data ----
+# Keep the directory structure (via .gitkeep) but not the contents.
+# IMPORTANT: do NOT change these to `data/raw/` etc. — that would also
+# ignore the .gitkeep files and the directories would not survive a clone.
+data/raw/*
+!data/raw/.gitkeep
+data/partitioned/*
+!data/partitioned/.gitkeep
+data/bronze/*
+!data/bronze/.gitkeep
+data/bronze_streaming/*
+!data/bronze_streaming/.gitkeep
+data/silver/*
+!data/silver/.gitkeep
+
+# ---- Airflow ----
+airflow/logs/
+airflow/airflow.cfg
+airflow/airflow.db
+airflow/webserver_config.py
+airflow/standalone_admin_password.txt
+
+# ---- Spark ----
+spark/warehouse/
+spark/metastore_db/
+spark/spark-warehouse/
+derby.log
+*.crc
+_SUCCESS
+
+# ---- dbt ----
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# ---- Great Expectations ----
+great_expectations/uncommitted/
+
+# ---- Environment / secrets ----
+.env
+.env.*
+!.env.example
