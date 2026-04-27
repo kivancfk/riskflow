@@ -1,23 +1,14 @@
-# RiskFlow — local development stack
+# RiskFlow — local development stack (v3)
 #
-# Services:
-#   - postgres        : warehouse for serving + Airflow metadata + dbt + monitoring tables
-#   - airflow-init    : one-shot init (DB migrate, create admin user) — exits when done
-#   - airflow         : LocalExecutor running scheduler + webserver in one container
-#   - spark-master    : standalone Spark master for SparkSubmitOperator targets
-#   - spark-worker    : single Spark worker (more workers can be added by scaling this service)
-#   - kafka           : Kafka in KRaft mode (no Zookeeper)
-#   - kafka-ui        : optional web UI for inspecting topics
-#
-# Quick start:
-#   docker compose up airflow-init    # one-time DB setup
-#   docker compose up -d               # start everything
-#   docker compose logs -f airflow     # tail Airflow logs
-#
-# UIs:
-#   - Airflow:    http://localhost:8080   (admin / admin)
-#   - Spark:      http://localhost:8081
-#   - Kafka UI:   http://localhost:8090
+# Changelog v3:
+#   - Switched Kafka from bitnami/kafka:3.7 (retired) to apache/kafka:4.0.2.
+#     Apache publishes official Kafka images since 3.7.0; env vars are
+#     mostly the same but lose the "CFG_" prefix (KAFKA_NODE_ID, not
+#     KAFKA_CFG_NODE_ID). We rewrote them accordingly.
+#   - Pinned all images to specific patch versions so no future tag
+#     retirement breaks the build.
+# Changelog v2:
+#   - Switched Spark from bitnami/spark:3.5 (retired) to apache/spark:3.5.6.
 
 x-airflow-common: &airflow-common
   build:
@@ -31,11 +22,9 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-    # connections (resolved by Airflow at runtime, no need to seed)
     AIRFLOW_CONN_SPARK_DEFAULT: 'spark://spark-master:7077?deploy-mode=client'
     AIRFLOW_CONN_POSTGRES_DEFAULT: 'postgresql://riskflow:riskflow@postgres:5432/riskflow'
     AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://kafka:9092'
-    # Make Airflow worker write Spark logs where the host can see them
     PYTHONPATH: '/opt/airflow:/opt/airflow/transformations'
   volumes:
     - ./airflow/dags:/opt/airflow/dags
@@ -46,6 +35,8 @@ x-airflow-common: &airflow-common
     - ./great_expectations:/opt/airflow/great_expectations
     - ./data:/opt/airflow/data
     - ./dbt:/opt/airflow/dbt
+    - ./scripts:/opt/airflow/scripts
+    - ./tests:/opt/airflow/tests
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     postgres:
@@ -54,10 +45,10 @@ x-airflow-common: &airflow-common
 services:
 
   # ---------------------------------------------------------------------
-  # Postgres — used by Airflow metadata, dbt warehouse, and our tables
+  # Postgres 16
   # ---------------------------------------------------------------------
   postgres:
-    image: postgres:16
+    image: postgres:16.4
     container_name: riskflow-postgres
     environment:
       POSTGRES_USER: airflow
@@ -75,7 +66,7 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------
-  # Airflow init — runs once, creates the admin user and migrates the DB
+  # Airflow init — one-shot
   # ---------------------------------------------------------------------
   airflow-init:
     <<: *airflow-common
@@ -93,7 +84,7 @@ services:
     restart: "no"
 
   # ---------------------------------------------------------------------
-  # Airflow — LocalExecutor, single container running scheduler + webserver
+  # Airflow webserver + scheduler
   # ---------------------------------------------------------------------
   airflow:
     <<: *airflow-common
@@ -113,17 +104,17 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------
-  # Spark — standalone master + one worker
+  # Spark 3.5.6 — apache official image
   # ---------------------------------------------------------------------
   spark-master:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.6
     container_name: riskflow-spark-master
+    user: root
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      SPARK_NO_DAEMONIZE: "true"
+    command: >
+      bash -c "/opt/spark/sbin/start-master.sh -h spark-master &&
+               tail -f /opt/spark/logs/*master*.out"
     ports:
       - "8081:8080"   # Spark master UI
       - "7077:7077"   # Spark master RPC
@@ -134,17 +125,16 @@ services:
     restart: unless-stopped
 
   spark-worker:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.6
     container_name: riskflow-spark-worker
+    user: root
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_NO_DAEMONIZE: "true"
       SPARK_WORKER_MEMORY: 2G
-      SPARK_WORKER_CORES: 2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED: "no"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
-      SPARK_SSL_ENABLED: "no"
+      SPARK_WORKER_CORES: "2"
+    command: >
+      bash -c "/opt/spark/sbin/start-worker.sh spark://spark-master:7077 &&
+               tail -f /opt/spark/logs/*worker*.out"
     depends_on:
       - spark-master
     volumes:
@@ -154,29 +144,34 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------
-  # Kafka — KRaft mode (no Zookeeper required since Kafka 3.3+)
+  # Kafka 4.0.2 — apache official image, KRaft single-node combined mode
   # ---------------------------------------------------------------------
+  # NOTE: Apache's image uses KAFKA_* (no CFG_ prefix), unlike Bitnami.
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:4.0.2
     container_name: riskflow-kafka
     environment:
-      KAFKA_CFG_NODE_ID: 1
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
     ports:
-      - "29092:29092"   # external (host) listener
+      - "29092:29092"
     volumes:
-      - kafka-data:/bitnami/kafka
+      - kafka-data:/tmp/kraft-combined-logs
     restart: unless-stopped
 
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: riskflow-kafka-ui
     environment:
       KAFKA_CLUSTERS_0_NAME: riskflow

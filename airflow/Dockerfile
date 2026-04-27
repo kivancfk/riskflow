@@ -1,19 +1,17 @@
-# RiskFlow — Airflow image
+# RiskFlow — Airflow image (v4)
 #
-# Built on the official Airflow image, adds:
-#   - Java 17 (required for spark-submit client)
-#   - apache-airflow-providers-apache-spark (SparkSubmitOperator)
-#   - apache-airflow-providers-postgres
-#   - dbt-postgres
-#   - great-expectations
-#   - pyspark (matching Spark cluster version 3.5)
-#   - kafka-python (for any DAG that talks to Kafka directly)
+# Changelog:
+#   v4: added --retries=10 --timeout=300 to all pip installs.
+#       PyPI timed out mid-download on the 317MB pyspark tarball.
+#       Default pip timeout is 15s; we now wait 5 min per chunk and retry 10x.
+#   v3: removed explicit pyspark pin (constraint conflict).
+#   v2: switched to Airflow constraints file.
+#   v1: original, suffered backtracking hell.
 
 FROM apache/airflow:2.10.4-python3.11
 
 USER root
 
-# Java is needed locally for spark-submit (client mode)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
@@ -24,14 +22,30 @@ RUN apt-get update && \
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
+# Pip resilience: longer timeout, more retries.
+# Set as env vars so all four pip installs inherit them automatically.
+ENV PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 USER airflow
 
-# Pinned versions matter — match Spark cluster (3.5), dbt-postgres (1.8), GE (0.18+)
+ARG AIRFLOW_VERSION=2.10.4
+ARG PYTHON_VERSION=3.11
+ARG CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+# Layer 1: Airflow providers + Kafka client.
 RUN pip install --no-cache-dir \
-    "apache-airflow-providers-apache-spark==4.11.3" \
-    "apache-airflow-providers-postgres==5.13.1" \
-    "pyspark==3.5.1" \
-    "dbt-postgres==1.8.2" \
-    "great-expectations==0.18.19" \
-    "kafka-python==2.0.2" \
-    "pandas==2.2.3"
+    --constraint "${CONSTRAINT_URL}" \
+    "apache-airflow-providers-apache-spark" \
+    "apache-airflow-providers-postgres" \
+    "kafka-python==2.0.2"
+
+# Layer 2: dbt-postgres in isolation.
+RUN pip install --no-cache-dir "dbt-postgres>=1.8,<1.9"
+
+# Layer 3: Great Expectations — loose pin, isolated layer.
+RUN pip install --no-cache-dir "great-expectations>=0.18,<0.19"
+
+# Layer 4: dev/test tools.
+RUN pip install --no-cache-dir "pytest>=8.0" "pytest-cov>=5.0"
