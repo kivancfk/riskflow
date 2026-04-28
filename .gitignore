@@ -23,6 +23,7 @@ htmlcov/
 cli.md
 riskflow_roadmap.html
 phase1_apply_notes.md
+docker-compose.old.v01.yml
 
 # ---- Data: never commit raw or generated data ----
 # Keep the directory structure (via .gitkeep) but not the contents.

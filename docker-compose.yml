@@ -22,7 +22,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-    AIRFLOW_CONN_SPARK_DEFAULT: 'spark://spark-master:7077?deploy-mode=client'
+    AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077,"extra":{"deploy-mode":"client"}}'
     AIRFLOW_CONN_POSTGRES_DEFAULT: 'postgresql://riskflow:riskflow@postgres:5432/riskflow'
     AIRFLOW_CONN_KAFKA_DEFAULT: 'kafka://kafka:9092'
     PYTHONPATH: '/opt/airflow:/opt/airflow/transformations'
@@ -119,6 +119,12 @@ services:
       - "8081:8080"   # Spark master UI
       - "7077:7077"   # Spark master RPC
     volumes:
+      # Same-path mounts required because Spark executors read local file:// paths
+      # produced by Airflow SparkSubmitOperator.
+      - ./spark/jobs:/opt/airflow/spark_jobs
+      - ./transformations:/opt/airflow/transformations
+      - ./data:/opt/airflow/data
+      # Convenience aliases for manual Spark-container debugging.
       - ./spark/jobs:/opt/spark_jobs
       - ./transformations:/opt/transformations
       - ./data:/opt/data
@@ -138,6 +144,12 @@ services:
     depends_on:
       - spark-master
     volumes:
+      # Same-path mounts required because Spark executors read local file:// paths
+      # produced by Airflow SparkSubmitOperator.
+      - ./spark/jobs:/opt/airflow/spark_jobs
+      - ./transformations:/opt/airflow/transformations
+      - ./data:/opt/airflow/data
+      # Convenience aliases for manual Spark-container debugging.
       - ./spark/jobs:/opt/spark_jobs
       - ./transformations:/opt/transformations
       - ./data:/opt/data
