@@ -22,6 +22,7 @@ htmlcov/
 # ---- Local notes / scratchpad ----
 cli.md
 riskflow_roadmap.html
+phase1_apply_notes.md
 
 # ---- Data: never commit raw or generated data ----
 # Keep the directory structure (via .gitkeep) but not the contents.
