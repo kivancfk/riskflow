@@ -18,7 +18,19 @@ from pyspark.sql import SparkSession
 from pyspark.sql import types as T
 
 # Add the spark/jobs directory to the path so we can import bronze_ingest.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "spark" / "jobs"))
+# sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "spark" / "jobs"))
+
+# Add the Spark job directory to the path so we can import bronze_ingest.
+_repo_root = Path(__file__).resolve().parents[2]
+_candidate_paths = (
+    _repo_root / "spark" / "jobs",      # local repo layout
+    Path("/opt/airflow/spark_jobs"),      # airflow container mount layout
+)
+for _path in _candidate_paths:
+    if (_path / "bronze_ingest.py").exists():
+        sys.path.insert(0, str(_path))
+        break
+
 
 from bronze_ingest import (  # noqa: E402
     LINEAGE_COLUMNS,

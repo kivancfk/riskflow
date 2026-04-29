@@ -1,17 +1,13 @@
-"""RiskFlow — daily bronze ingestion DAG (Phase 1, v2).
+"""RiskFlow — daily bronze ingestion DAG (Phase 1, v3).
 
-Changelog v2:
-  - Removed fs_conn_id (Airflow's default fs_default connection isn't
-    auto-created and broke task instance materialization)
-  - Set FileSensor.filepath at construction time using f-string +
-    Jinja, instead of post-construction mutation
-  - Simplified Param to a plain string (regex validation was preventing
-    task instance creation when conf was passed)
+Changelog:
+  v3: removed env_vars={"PYTHONPATH": "/opt/transformations"} since
+      bronze_ingest.py is now self-contained
+  v2: removed fs_conn_id, simplified Param, fixed FileSensor filepath
+  v1: initial version
 
 Triggered manually:
     make run-day DAY=07
-which dispatches:
-    airflow dags trigger riskflow_daily_ingest --conf '{"day": "07"}'
 """
 
 from __future__ import annotations
@@ -36,7 +32,6 @@ SOURCE_DIR = "/opt/airflow/data/partitioned"
 BRONZE_DIR = "/opt/airflow/data/bronze"
 SPARK_JOB  = "/opt/airflow/spark_jobs/bronze_ingest.py"
 
-# Postgres connection string — dedicated user, not Airflow's metadata DB
 RISKFLOW_PG_DSN = (
     "host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow"
 )
@@ -44,31 +39,22 @@ RISKFLOW_PG_DSN = (
 DEFAULT_ARGS = {
     "owner": "riskflow",
     "depends_on_past": False,
-    "retries": 0,                      # validation failures must NOT retry
+    "retries": 0,
     "retry_delay": timedelta(minutes=2),
 }
 
 
-# ---------------------------------------------------------------
-# Task 3 callable — record_pipeline_run
-# ---------------------------------------------------------------
 def _record_pipeline_run(**context) -> None:
-    """Always-runs task that writes one row to pipeline_runs.
-
-    Uses trigger_rule="all_done", so it runs whether ingest_to_bronze
-    succeeded or failed. We want one row per attempt.
-    """
+    """Always-runs task that writes one row to pipeline_runs."""
     ti = context["ti"]
     dag_run = context["dag_run"]
     day_param = (dag_run.conf or {}).get("day", "??")
-    partition_date = context["ds"]      # logical execution date YYYY-MM-DD
+    partition_date = context["ds"]
 
-    # Determine status from upstream task state
     upstream_ti = ti.get_dagrun().get_task_instance("ingest_to_bronze")
     upstream_state = upstream_ti.current_state() if upstream_ti else None
     status = "success" if upstream_state == "success" else "failed"
 
-    # Probe the bronze partition we just wrote (if successful) for the row count
     bronze_row_count: int | None = None
     if status == "success":
         try:
@@ -83,7 +69,6 @@ def _record_pipeline_run(**context) -> None:
         except Exception:
             log.warning("Could not count bronze rows; leaving NULL.")
 
-    # Compute duration from upstream task timestamps
     started_at = (
         upstream_ti.start_date if upstream_ti and upstream_ti.start_date
         else datetime.now(timezone.utc)
@@ -130,29 +115,18 @@ def _record_pipeline_run(**context) -> None:
             )
 
 
-# ---------------------------------------------------------------
-# DAG
-# ---------------------------------------------------------------
 with DAG(
     dag_id="riskflow_daily_ingest",
     description="Phase 1: ingest one PaySim daily partition (CSV → bronze Parquet).",
     default_args=DEFAULT_ARGS,
-    start_date=datetime(2026, 5, 1),
-    schedule="@daily",                 # production intent; paused in dev
+    start_date=datetime(2025, 1, 1),
+    schedule="@daily",
     catchup=False,
     max_active_runs=1,
     tags=["riskflow", "bronze"],
-    params={
-        # Plain string Param — no regex pattern. Validation lives in the
-        # downstream tasks. Regex on Param can silently block task
-        # instance creation when conf is passed via API.
-        "day": "01",
-    },
+    params={"day": "01"},
 ) as dag:
 
-    # ---- Task 1: sense the source CSV ----
-    # FileSensor uses the local filesystem when fs_conn_id is omitted.
-    # Path is templated via Jinja and resolves at runtime.
     check_source_file_exists = FileSensor(
         task_id="check_source_file_exists",
         filepath=f"{SOURCE_DIR}/day_{{{{ params.day }}}}.csv",
@@ -161,7 +135,6 @@ with DAG(
         mode="poke",
     )
 
-    # ---- Task 2: submit Spark ingestion job ----
     ingest_to_bronze = SparkSubmitOperator(
         task_id="ingest_to_bronze",
         application=SPARK_JOB,
@@ -174,11 +147,9 @@ with DAG(
             "--load-ts",    "{{ ts }}",
             "--run-id",     "{{ run_id }}",
         ],
-        env_vars={"PYTHONPATH": "/opt/transformations"},
         verbose=False,
     )
 
-    # ---- Task 3: record pipeline_run row, even on failure ----
     record_pipeline_run = PythonOperator(
         task_id="record_pipeline_run",
         python_callable=_record_pipeline_run,

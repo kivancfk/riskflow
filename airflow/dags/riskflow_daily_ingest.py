@@ -143,7 +143,7 @@ with DAG(
         application_args=[
             "--input-csv",  f"{SOURCE_DIR}/day_{{{{ params.day }}}}.csv",
             "--output-dir", BRONZE_DIR,
-            "--load-date",  "{{ ds }}",
+            "--load-date",  "2026-04-{{ params.day }}",
             "--load-ts",    "{{ ts }}",
             "--run-id",     "{{ run_id }}",
         ],

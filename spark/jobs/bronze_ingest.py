@@ -145,6 +145,7 @@ def ingest(
     log.info("Read %s rows from %s", f"{row_count:,}", input_csv.name)
 
     log.info("Writing to %s/load_date=%s/", output_dir, load_date)
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     (
         enriched.write
         .mode("overwrite")
