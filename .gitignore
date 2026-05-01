@@ -67,3 +67,21 @@ great_expectations/uncommitted/
 .env
 .env.*
 !.env.example
+
+# Generated medallion outputs
+data/bronze/*
+!data/bronze/.gitkeep
+
+data/silver/*
+!data/silver/.gitkeep
+
+data/silver_quarantine/*
+!data/silver_quarantine/.gitkeep
+
+data/bronze_streaming/*
+!data/bronze_streaming/.gitkeep
+
+# Local/generated artifacts
+great_expectations/uncommitted/
+.DS_Store
+*.crc
