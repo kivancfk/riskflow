@@ -113,3 +113,72 @@ lint:
 
 format:
 	ruff format .
+# ============================================================
+# Phase 2 — Great Expectations targets
+# Append these to your existing Makefile.
+# ============================================================
+
+.PHONY: ge-init ge-validate-bronze ge-validate-silver ge-docs ge-list
+
+# One-shot bootstrap: scaffold uncommitted/ + verify the GE config loads.
+# Idempotent — safe to re-run.
+ge-init:
+	@echo "▶ Bootstrapping GE project + verifying context loads..."
+	docker compose exec airflow great_expectations \
+		--config /opt/airflow/great_expectations \
+		--no-usage-stats \
+		project check-config || true
+	docker compose exec airflow python -c \
+		"import great_expectations as gx; \
+		ctx = gx.get_context(context_root_dir='/opt/airflow/great_expectations'); \
+		print('GE context OK — datasources:', list(ctx.list_datasources())); \
+		print('Suites:', [s for s in ctx.list_expectation_suite_names()]); \
+		print('Checkpoints:', ctx.list_checkpoints())"
+
+# Run bronze checkpoint manually for a specific day
+# Usage: make ge-validate-bronze DAY=07
+ge-validate-bronze:
+	@echo "▶ Validating bronze for day_$(DAY)..."
+	docker compose exec airflow python -c \
+		"import great_expectations as gx; \
+		from pyspark.sql import SparkSession; \
+		spark = SparkSession.builder.appName('ge_check').config('spark.ui.enabled','false').getOrCreate(); \
+		df = spark.read.parquet('/opt/airflow/data/bronze/load_date=2026-04-$(DAY)').toPandas(); \
+		spark.stop(); \
+		ctx = gx.get_context(context_root_dir='/opt/airflow/great_expectations'); \
+		r = ctx.run_checkpoint(checkpoint_name='bronze_checkpoint', batch_request={'datasource_name':'bronze_pandas','data_asset_name':'bronze_partition','runtime_parameters':{'batch_data':df},'batch_identifiers':{'load_date':'2026-04-$(DAY)'}}); \
+		print('SUCCESS' if r['success'] else 'FAILED'); \
+		print('Stats:', r.get('run_results'))"
+
+# Run silver checkpoint manually for a specific day
+# Usage: make ge-validate-silver DAY=07
+ge-validate-silver:
+	@echo "▶ Validating silver for day_$(DAY)..."
+	docker compose exec airflow python -c \
+		"import great_expectations as gx; \
+		from pyspark.sql import SparkSession; \
+		spark = SparkSession.builder.appName('ge_check').config('spark.ui.enabled','false').getOrCreate(); \
+		df = spark.read.parquet('/opt/airflow/data/silver/load_date=2026-04-$(DAY)').toPandas(); \
+		spark.stop(); \
+		ctx = gx.get_context(context_root_dir='/opt/airflow/great_expectations'); \
+		r = ctx.run_checkpoint(checkpoint_name='silver_checkpoint', batch_request={'datasource_name':'silver_pandas','data_asset_name':'silver_partition','runtime_parameters':{'batch_data':df},'batch_identifiers':{'load_date':'2026-04-$(DAY)'}}); \
+		print('SUCCESS' if r['success'] else 'FAILED')"
+
+# Build Data Docs locally
+ge-docs:
+	@echo "▶ Building GE Data Docs..."
+	docker compose exec airflow python -c \
+		"import great_expectations as gx; \
+		ctx = gx.get_context(context_root_dir='/opt/airflow/great_expectations'); \
+		ctx.build_data_docs()"
+	@echo "▶ Data Docs built. Open in browser:"
+	@echo "  open ./great_expectations/uncommitted/data_docs/local_site/index.html"
+
+# Quick reference: what's in the GE project right now
+ge-list:
+	docker compose exec airflow python -c \
+		"import great_expectations as gx; \
+		ctx = gx.get_context(context_root_dir='/opt/airflow/great_expectations'); \
+		print('Datasources:', [d['name'] for d in ctx.list_datasources()]); \
+		print('Suites:', ctx.list_expectation_suite_names()); \
+		print('Checkpoints:', ctx.list_checkpoints())"

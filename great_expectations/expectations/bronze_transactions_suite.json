@@ -1,0 +1,55 @@
+{
+  "data_asset_type": null,
+  "expectation_suite_name": "bronze_transactions_suite",
+  "expectations": [
+    {
+      "expectation_type": "expect_table_columns_to_match_set",
+      "kwargs": {
+        "column_set": [
+          "step",
+          "type",
+          "amount",
+          "nameOrig",
+          "oldbalanceOrg",
+          "newbalanceOrig",
+          "nameDest",
+          "oldbalanceDest",
+          "newbalanceDest",
+          "isFraud",
+          "isFlaggedFraud",
+          "_load_ts",
+          "_source_file",
+          "_run_id"
+        ],
+        "exact_match": false
+      },
+      "meta": {
+        "notes": "Bronze must include all source columns plus the three lineage columns."
+      }
+    },
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": {
+        "min_value": 1,
+        "max_value": 600000
+      },
+      "meta": {
+        "notes": "Catches genuinely empty partitions. Upper bound covers PaySim's busiest day (~575k rows)."
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "type",
+        "value_set": ["PAYMENT", "TRANSFER", "CASH_OUT", "CASH_IN", "DEBIT"]
+      },
+      "meta": {
+        "notes": "Five canonical PaySim transaction types. Anything else means the upstream schema drifted."
+      }
+    }
+  ],
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.21"
+  }
+}

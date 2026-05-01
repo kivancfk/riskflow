@@ -1,0 +1,24 @@
+name: bronze_checkpoint
+config_version: 1.0
+class_name: Checkpoint
+module_name: great_expectations.checkpoint
+run_name_template: "%Y%m%d-%H%M%S-bronze-validation"
+
+validations:
+  - expectation_suite_name: bronze_transactions_suite
+    batch_request:
+      datasource_name: bronze_pandas
+      data_connector_name: runtime_data_connector
+      data_asset_name: bronze_partition
+
+action_list:
+  - name: store_validation_result
+    action:
+      class_name: StoreValidationResultAction
+  - name: store_evaluation_params
+    action:
+      class_name: StoreEvaluationParametersAction
+  - name: update_data_docs
+    action:
+      class_name: UpdateDataDocsAction
+      site_names: []

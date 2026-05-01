@@ -1,0 +1,8 @@
+# GE generates these at runtime — regenerable, do not commit
+uncommitted/
+
+# Local config overrides — do not commit
+config_variables.yml
+
+# Plugins are scaffolded but empty by default
+plugins/
