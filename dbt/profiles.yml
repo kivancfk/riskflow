@@ -1,3 +1,12 @@
+# RiskFlow dbt profile.
+# Maps profile name 'riskflow' (referenced in dbt_project.yml) to a
+# Postgres connection. Read by dbt at runtime.
+#
+# target.schema = dbt_default — a catch-all schema that's unused in
+# practice because every model overrides via +schema in dbt_project.yml.
+# The generate_schema_name macro forces +schema to be used literally
+# (no target.schema prefix).
+
 riskflow:
   target: dev
   outputs:
@@ -8,7 +17,7 @@ riskflow:
       user: riskflow
       password: riskflow
       dbname: riskflow
-      schema: marts
+      schema: dbt_default        # neutral default; models override per-folder
       threads: 4
       keepalives_idle: 0
       sslmode: disable

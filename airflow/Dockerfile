@@ -1,15 +1,13 @@
-# RiskFlow — Airflow image (v5)
+# RiskFlow — Airflow image (v6)
 #
 # Changelog:
+#   v6: added git to apt-get install (dbt requires git for `dbt deps`
+#       and reports "git [ERROR]" in `dbt debug` without it).
 #   v5: pinned pyspark to 3.5.6 to match apache/spark:3.5.6 cluster.
-#       Prevents java.io.InvalidClassException serialVersionUID
-#       mismatches on QueryStageExec when the driver and executors
-#       run different Spark patch versions. Pinned GE to 0.18.21
-#       (last stable 0.18) for filesystem-based workflow.
-#   v4: added --retries=10 --timeout=300 to all pip installs.
+#   v4: added pip retries/timeout for PyPI flakiness.
 #   v3: removed explicit pyspark pin (constraint conflict).
 #   v2: switched to Airflow constraints file.
-#   v1: original, suffered backtracking hell.
+#   v1: original.
 
 FROM apache/airflow:2.10.4-python3.11
 
@@ -18,7 +16,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
         curl \
-        procps && \
+        procps \
+        git && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -51,8 +50,6 @@ RUN pip install --no-cache-dir --upgrade "pyspark==3.5.6"
 RUN pip install --no-cache-dir "dbt-postgres>=1.8,<1.9"
 
 # Layer 4: Great Expectations — exact pin for Phase 2 filesystem workflow.
-# 0.18.21 is the last stable 0.18 release; tighter pin avoids
-# patch-level API drift across the 0.18.x range.
 RUN pip install --no-cache-dir "great-expectations==0.18.21"
 
 # Layer 5: dev/test tools.

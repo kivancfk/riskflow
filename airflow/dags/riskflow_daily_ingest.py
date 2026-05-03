@@ -1,20 +1,29 @@
-"""RiskFlow — daily ingestion DAG (Phase 2 v1, filesystem GE).
+"""RiskFlow — daily ingestion DAG (Phase 3 v2).
 
-Design:
-  - Filesystem-based GE project at /opt/airflow/great_expectations/
-  - Pandas datasource — bronze partition is read by PySpark, converted
-    to pandas (~150MB for max-size partition), validated by GE
-  - Bronze checkpoint runs after ingest_to_bronze
-  - Silver checkpoint runs after transform_to_silver
-  - Both checkpoint tasks raise AirflowException on failure, skipping
-    downstream tasks via Airflow's normal trigger_rule semantics
+Phase 3 additions (vs Phase 2's 6 tasks):
+  - load_silver_to_postgres: PySpark task that writes the day's silver
+    partition into staging.silver_transactions via JDBC. Idempotent —
+    DELETEs the day's existing rows before writing.
+  - run_dbt_gold: BashOperator that runs `dbt build --select +gold`,
+    which materializes both staging views AND gold tables, plus runs
+    all schema and singular tests in one command.
 
-Day formatting: --load-date is always zero-padded (e.g. 'day': '7' →
-load_date=2026-04-07). The DAG accepts both '7' and '07' to be lenient
-about how users invoke `make run-day DAY=...`.
-
-Triggered manually:
-    make run-day DAY=07
+DAG flow (8 tasks):
+  check_source_file_exists
+       ↓
+  ingest_to_bronze
+       ↓
+  validate_bronze            (GE checkpoint)
+       ↓
+  transform_to_silver
+       ↓
+  validate_silver            (GE checkpoint)
+       ↓
+  load_silver_to_postgres    ← Phase 3
+       ↓
+  run_dbt_gold               ← Phase 3
+       ↓
+  record_pipeline_run        (always-runs)
 """
 
 from __future__ import annotations
@@ -25,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 
 import psycopg2
 from airflow import DAG
+from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 from airflow.sensors.filesystem import FileSensor
@@ -32,16 +42,20 @@ from airflow.utils.trigger_rule import TriggerRule
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------
-# Paths inside the Airflow container
-# ---------------------------------------------------------------
 SOURCE_DIR     = "/opt/airflow/data/partitioned"
 BRONZE_DIR     = "/opt/airflow/data/bronze"
 SILVER_DIR     = "/opt/airflow/data/silver"
 QUARANTINE_DIR = "/opt/airflow/data/silver_quarantine"
 BRONZE_JOB     = "/opt/airflow/spark_jobs/bronze_ingest.py"
 SILVER_JOB     = "/opt/airflow/spark_jobs/silver_transform.py"
+SILVER_TO_PG_JOB = "/opt/airflow/spark_jobs/silver_to_postgres.py"
 GE_ROOT        = "/opt/airflow/great_expectations"
+DBT_PROJECT    = "/opt/airflow/dbt"
+
+JDBC_URL       = "jdbc:postgresql://postgres:5432/riskflow"
+JDBC_USER      = "riskflow"
+JDBC_PASSWORD  = "riskflow"
+TARGET_TABLE   = "staging.silver_transactions"
 
 RISKFLOW_PG_DSN = (
     "host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow"
@@ -56,25 +70,11 @@ DEFAULT_ARGS = {
 
 
 def _zero_padded_day(dag_run) -> str:
-    """Extract `day` from DAG conf and return as a zero-padded 2-char string.
-
-    Accepts '7' and '07' both — interview-grade leniency.
-    """
     raw = (dag_run.conf or {}).get("day", "1")
     return f"{int(raw):02d}"
 
 
-# ---------------------------------------------------------------
-# Task callables
-# ---------------------------------------------------------------
-
 def _validate_bronze(**context) -> None:
-    """Run GE bronze checkpoint. Raises AirflowException on failure.
-
-    Uses filesystem GE context — suite, checkpoint, datasource all
-    defined in /opt/airflow/great_expectations/. The checkpoint runs
-    against the load_date partition for this DAG run.
-    """
     import great_expectations as gx
     from airflow.exceptions import AirflowException
     from pyspark.sql import SparkSession
@@ -86,8 +86,6 @@ def _validate_bronze(**context) -> None:
 
     log.info("GE bronze checkpoint for load_date=%s", load_date)
 
-    # Read the bronze partition with PySpark, convert to pandas for GE.
-    # Max partition size in this dataset is ~575k rows ≈ 150MB in memory.
     spark = (
         SparkSession.builder
         .appName("ge_bronze_read")
@@ -101,9 +99,7 @@ def _validate_bronze(**context) -> None:
 
     log.info("Validating %s bronze rows", f"{len(pandas_df):,}")
 
-    # Filesystem GE context — config in /opt/airflow/great_expectations/
     context_gx = gx.get_context(context_root_dir=GE_ROOT)
-
     result = context_gx.run_checkpoint(
         checkpoint_name="bronze_checkpoint",
         batch_request={
@@ -115,11 +111,8 @@ def _validate_bronze(**context) -> None:
     )
 
     if not result["success"]:
-        failed = [
-            run_id
-            for run_id, run in result["run_results"].items()
-            if not run["validation_result"]["success"]
-        ]
+        failed = [k for k, v in result["run_results"].items()
+                  if not v["validation_result"]["success"]]
         raise AirflowException(
             f"Bronze checkpoint failed for load_date={load_date}: {failed}"
         )
@@ -128,7 +121,6 @@ def _validate_bronze(**context) -> None:
 
 
 def _validate_silver(**context) -> None:
-    """Run GE silver checkpoint. Same pattern as validate_bronze."""
     import great_expectations as gx
     from airflow.exceptions import AirflowException
     from pyspark.sql import SparkSession
@@ -156,7 +148,6 @@ def _validate_silver(**context) -> None:
     log.info("Validating %s silver rows", f"{row_count:,}")
 
     context_gx = gx.get_context(context_root_dir=GE_ROOT)
-
     result = context_gx.run_checkpoint(
         checkpoint_name="silver_checkpoint",
         batch_request={
@@ -168,28 +159,24 @@ def _validate_silver(**context) -> None:
     )
 
     if not result["success"]:
-        failed = [
-            run_id
-            for run_id, run in result["run_results"].items()
-            if not run["validation_result"]["success"]
-        ]
+        failed = [k for k, v in result["run_results"].items()
+                  if not v["validation_result"]["success"]]
         raise AirflowException(
             f"Silver checkpoint failed for load_date={load_date}: {failed}"
         )
 
-    # Stash row count for downstream record_pipeline_run
     context["ti"].xcom_push(key="silver_row_count", value=row_count)
     log.info("Silver checkpoint passed for load_date=%s", load_date)
 
 
 def _record_pipeline_run(**context) -> None:
-    """Always-runs task. Writes one row to pipeline_runs per attempt."""
+    """Always-runs task. Records dbt success/failure as the upstream-of-record."""
     ti = context["ti"]
     dag_run = context["dag_run"]
     day = _zero_padded_day(dag_run)
     partition_date = context["ds"]
 
-    upstream_ti = ti.get_dagrun().get_task_instance("transform_to_silver")
+    upstream_ti = ti.get_dagrun().get_task_instance("run_dbt_gold")
     upstream_state = upstream_ti.current_state() if upstream_ti else None
     status = "success" if upstream_state == "success" else "failed"
 
@@ -243,18 +230,15 @@ def _record_pipeline_run(**context) -> None:
             )
 
 
-# ---------------------------------------------------------------
-# DAG
-# ---------------------------------------------------------------
 with DAG(
     dag_id="riskflow_daily_ingest",
-    description="Phase 2: bronze ingest + GE checkpoints + silver transform.",
+    description="Phase 3: bronze + silver + dbt gold marts.",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2025, 1, 1),
     schedule="@daily",
     catchup=False,
     max_active_runs=1,
-    tags=["riskflow", "bronze", "silver", "ge"],
+    tags=["riskflow", "bronze", "silver", "gold", "dbt"],
     params={"day": "01"},
 ) as dag:
 
@@ -307,6 +291,32 @@ with DAG(
         python_callable=_validate_silver,
     )
 
+    load_silver_to_postgres = SparkSubmitOperator(
+        task_id="load_silver_to_postgres",
+        application=SILVER_TO_PG_JOB,
+        conn_id="spark_default",
+        name="riskflow_silver_to_postgres",
+        packages="org.postgresql:postgresql:42.7.4",
+        application_args=[
+            "--silver-dir",     SILVER_DIR,
+            "--load-date",      "2026-04-{{ '%02d' % (params.day | int) }}",
+            "--jdbc-url",       JDBC_URL,
+            "--jdbc-user",      JDBC_USER,
+            "--jdbc-password",  JDBC_PASSWORD,
+            "--target-table",   TARGET_TABLE,
+        ],
+        verbose=False,
+    )
+
+    run_dbt_gold = BashOperator(
+        task_id="run_dbt_gold",
+        bash_command=(
+            f"cd {DBT_PROJECT} && "
+            f"DBT_PROFILES_DIR={DBT_PROJECT} "
+            f"dbt build --select +gold --no-version-check"
+        ),
+    )
+
     record_pipeline_run = PythonOperator(
         task_id="record_pipeline_run",
         python_callable=_record_pipeline_run,
@@ -319,5 +329,7 @@ with DAG(
         >> validate_bronze
         >> transform_to_silver
         >> validate_silver
+        >> load_silver_to_postgres
+        >> run_dbt_gold
         >> record_pipeline_run
     )

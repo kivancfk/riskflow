@@ -182,3 +182,81 @@ ge-list:
 		print('Datasources:', [d['name'] for d in ctx.list_datasources()]); \
 		print('Suites:', ctx.list_expectation_suite_names()); \
 		print('Checkpoints:', ctx.list_checkpoints())"
+# ============================================================
+# Phase 3 — dbt + Postgres staging targets
+#
+# All target names are UNIQUE (no overlap with Phase 2's `dbt-test`
+# and `dbt-docs`). Specifically:
+#   - dbt-test-gold  (not dbt-test)
+#   - dbt-docs-gold  (not dbt-docs)
+#   - dbt-debug
+#   - dbt-build-gold
+#   - pg-init-staging
+#   - pg-truncate-staging
+#   - pg-row-counts
+#
+# Append these to your existing Makefile.
+# ============================================================
+
+.PHONY: dbt-debug dbt-build-gold dbt-test-gold dbt-docs-gold dbt-clean \
+        pg-init-staging pg-truncate-staging pg-row-counts
+
+# Run dbt's connection check
+dbt-debug:
+	docker compose exec airflow bash -c \
+		"cd /opt/airflow/dbt && \
+		DBT_PROFILES_DIR=/opt/airflow/dbt dbt debug --no-version-check"
+
+# Build all gold models + their staging dependencies + run all tests.
+# Same command Airflow runs in run_dbt_gold task.
+dbt-build-gold:
+	docker compose exec airflow bash -c \
+		"cd /opt/airflow/dbt && \
+		DBT_PROFILES_DIR=/opt/airflow/dbt \
+		dbt build --select +gold --no-version-check"
+
+# Run only tests (no rebuild) — Phase 3 specific
+dbt-test-gold:
+	docker compose exec airflow bash -c \
+		"cd /opt/airflow/dbt && \
+		DBT_PROFILES_DIR=/opt/airflow/dbt dbt test --select +gold --no-version-check"
+
+# Generate dbt docs HTML
+dbt-docs-gold:
+	docker compose exec airflow bash -c \
+		"cd /opt/airflow/dbt && \
+		DBT_PROFILES_DIR=/opt/airflow/dbt && \
+		dbt docs generate --no-version-check && \
+		echo 'dbt docs at /opt/airflow/dbt/target/index.html'"
+
+# Reset dbt artifacts (target/, dbt_packages/)
+dbt-clean:
+	docker compose exec airflow bash -c \
+		"cd /opt/airflow/dbt && dbt clean"
+
+# Apply the staging table DDL once on a fresh stack
+pg-init-staging:
+	docker compose exec -T postgres psql -U riskflow -d riskflow \
+		< scripts/01_phase3_staging_table.sql
+
+# Quick truncate (use only when you really want to wipe staging)
+pg-truncate-staging:
+	docker compose exec postgres psql -U riskflow -d riskflow \
+		-c "TRUNCATE staging.silver_transactions;"
+
+# Quick row-count sanity check across all schemas
+pg-row-counts:
+	docker compose exec postgres psql -U riskflow -d riskflow -c \
+		"SELECT 'staging.silver_transactions' AS tbl, COUNT(*) FROM staging.silver_transactions \
+		 UNION ALL \
+		 SELECT 'dbt_staging.stg_silver_transactions',  COUNT(*) FROM dbt_staging.stg_silver_transactions \
+		 UNION ALL \
+		 SELECT 'dbt_staging.stg_pipeline_runs',        COUNT(*) FROM dbt_staging.stg_pipeline_runs \
+		 UNION ALL \
+		 SELECT 'gold.gold_daily_fraud_summary',          COUNT(*) FROM gold.gold_daily_fraud_summary \
+		 UNION ALL \
+		 SELECT 'gold.gold_customer_risk_features',       COUNT(*) FROM gold.gold_customer_risk_features \
+		 UNION ALL \
+		 SELECT 'gold.gold_transaction_velocity_features', COUNT(*) FROM gold.gold_transaction_velocity_features \
+		 UNION ALL \
+		 SELECT 'gold.gold_pipeline_quality_summary',     COUNT(*) FROM gold.gold_pipeline_quality_summary;"

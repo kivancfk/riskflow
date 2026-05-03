@@ -85,3 +85,6 @@ data/bronze_streaming/*
 great_expectations/uncommitted/
 .DS_Store
 *.crc
+
+# dbt user-specific config (UUID, do not commit)
+dbt/.user.yml

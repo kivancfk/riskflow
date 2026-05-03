@@ -1,0 +1,123 @@
+version: 2
+
+models:
+  # ----- Staging -----
+  - name: stg_silver_transactions
+    description: "Cleaned silver transactions sourced from staging.silver_transactions."
+    columns:
+      - name: load_date
+        data_tests:
+          - not_null
+      - name: name_orig
+        data_tests:
+          - not_null
+      - name: name_dest
+        data_tests:
+          - not_null
+      - name: amount
+        data_tests:
+          - not_null
+      - name: type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["PAYMENT", "TRANSFER", "CASH_OUT", "CASH_IN", "DEBIT"]
+
+  - name: stg_pipeline_runs
+    description: "Operational pipeline_runs, mirrored as a view."
+    columns:
+      - name: run_id
+        data_tests:
+          - unique
+          - not_null
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["success", "failed"]
+
+  # ----- Gold -----
+
+  - name: gold_daily_fraud_summary
+    description: "Daily fraud volumes by transaction type."
+    columns:
+      - name: daily_fraud_key
+        description: "Composite key: load_date|type"
+        data_tests:
+          - unique
+          - not_null
+      - name: load_date
+        data_tests:
+          - not_null
+      - name: type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["PAYMENT", "TRANSFER", "CASH_OUT", "CASH_IN", "DEBIT"]
+      - name: total_transactions
+        data_tests:
+          - not_null
+      - name: fraud_count
+        data_tests:
+          - not_null
+      - name: fraud_transaction_rate
+        description: "fraud_count / total_transactions"
+
+  - name: gold_customer_risk_features
+    description: "Per-customer aggregated features for ML scoring."
+    columns:
+      - name: customer_id
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_risk_features_key
+        data_tests:
+          - unique
+          - not_null
+      - name: total_transactions_30d
+        data_tests:
+          - not_null
+      - name: customer_age_days
+        data_tests:
+          - not_null
+
+  - name: gold_transaction_velocity_features
+    description: "Hourly velocity per customer with previous-hour deltas."
+    columns:
+      - name: velocity_key
+        description: "Composite key: name_orig|load_date|event_hour"
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        data_tests:
+          - not_null
+      - name: load_date
+        data_tests:
+          - not_null
+      - name: event_hour
+        data_tests:
+          - not_null
+      - name: txn_count_in_hour
+        data_tests:
+          - not_null
+
+  - name: gold_pipeline_quality_summary
+    description: "DAG run quality and dropout rates per partition_date."
+    columns:
+      - name: pipeline_quality_key
+        description: "Composite key: partition_date|dag_id"
+        data_tests:
+          - unique
+          - not_null
+      - name: partition_date
+        data_tests:
+          - not_null
+      - name: dag_id
+        data_tests:
+          - not_null
+      - name: total_attempts
+        data_tests:
+          - not_null

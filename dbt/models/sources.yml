@@ -1,0 +1,43 @@
+version: 2
+
+sources:
+  - name: raw_staging
+    description: "Raw Spark JDBC tables landed in the 'staging' Postgres schema."
+    schema: staging
+    tables:
+      - name: silver_transactions
+        description: "Silver-layer transactions, loaded daily by silver_to_postgres.py."
+        columns:
+          - name: load_date
+            description: "Partition date (one CSV file per day)."
+          - name: nameOrig
+            description: "Origin customer ID."
+          - name: nameDest
+            description: "Destination customer/merchant ID."
+          - name: amount
+            description: "Transaction amount in PaySim's synthetic currency."
+          - name: type
+            description: "PAYMENT, TRANSFER, CASH_OUT, CASH_IN, or DEBIT."
+          - name: is_fraud
+            description: "True if the simulator labeled this as fraud."
+
+  - name: raw_public
+    description: "Operational tables written by the Airflow DAG itself."
+    schema: public
+    tables:
+      - name: pipeline_runs
+        description: "One row per DAG run attempt (record_pipeline_run task)."
+        columns:
+          - name: run_id
+            description: "UUID generated when the row is inserted."
+          - name: dag_id
+          - name: partition_date
+          - name: status
+            description: "'success' or 'failed'."
+          - name: started_at
+          - name: ended_at
+          - name: duration_seconds
+          - name: bronze_row_count
+          - name: silver_row_count
+          - name: failed_row_count
+          - name: notes
