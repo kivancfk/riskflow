@@ -1,5 +1,8 @@
-# RiskFlow — local development stack (v3)
+# RiskFlow — local development stack (v4)
 #
+# Changelog v4:
+#   - Phase 4: added streaming-producer and streaming-consumer services
+#     (kafka-python-based, NOT Spark Structured Streaming — see ADR-006).
 # Changelog v3:
 #   - Switched Kafka from bitnami/kafka:3.7 (retired) to apache/kafka:4.0.2.
 #     Apache publishes official Kafka images since 3.7.0; env vars are
@@ -37,6 +40,7 @@ x-airflow-common: &airflow-common
     - ./dbt:/opt/airflow/dbt
     - ./scripts:/opt/airflow/scripts
     - ./tests:/opt/airflow/tests
+    - ./streaming:/opt/airflow/streaming
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     postgres:
@@ -193,6 +197,68 @@ services:
     depends_on:
       - kafka
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------
+  # Phase 4: streaming producer
+  # Replays silver Parquet to the riskflow.transactions Kafka topic.
+  # Long-running. Loops forever. NOT triggered by Airflow.
+  # Reuses the airflow image (same build context) so kafka-python and
+  # pyarrow come from the same root pyproject.toml.
+  # ---------------------------------------------------------------------
+  streaming-producer:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    container_name: riskflow-streaming-producer
+    command: ["python", "-m", "streaming.producer"]
+    working_dir: /opt/riskflow
+    environment:
+      PYTHONPATH: /opt/riskflow
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: riskflow.transactions
+      SILVER_PATH: /opt/riskflow/data/silver
+      MSG_PER_SEC: "100"
+      DEMO_BURST: "true"        # set to "false" to disable burst injection
+      BURST_EVERY_N: "500"
+    volumes:
+      - ./streaming:/opt/riskflow/streaming
+      - ./data:/opt/riskflow/data:ro
+    depends_on:
+      - kafka
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+  # ---------------------------------------------------------------------
+  # Phase 4: streaming consumer
+  # Reads riskflow.transactions, applies velocity rule, writes to
+  # public.streaming_alerts via idempotent INSERT.
+  # ---------------------------------------------------------------------
+  streaming-consumer:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    container_name: riskflow-streaming-consumer
+    command: ["python", "-m", "streaming.consumer"]
+    working_dir: /opt/riskflow
+    environment:
+      PYTHONPATH: /opt/riskflow
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: riskflow.transactions
+      KAFKA_GROUP_ID: riskflow-streaming-consumer
+      PG_DSN: "host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow"
+      VELOCITY_N: "5"
+      VELOCITY_K_SECONDS: "60"
+      VELOCITY_T_AMOUNT: "100000"
+      HISTORY_MAX_PER_CUSTOMER: "100"
+    volumes:
+      - ./streaming:/opt/riskflow/streaming
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 15s
 
 volumes:
   postgres-data:

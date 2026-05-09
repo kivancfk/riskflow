@@ -12,6 +12,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pyspark==3.5.1",
     "pandas==2.2.3",
+    "pyarrow>=15.0",                # Phase 4: producer reads silver Parquet directly
     "great-expectations==0.18.19",
     "kafka-python==2.0.2",
     "psycopg2-binary>=2.9.9",
@@ -37,19 +38,25 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["N802", "N803"]  # test names can be loose
-"airflow/dags/**/*.py" = ["E402"]   # DAG files often import after sys.path fiddling
+"tests/**/*.py" = ["N802", "N803"]              # test names can be loose
+"streaming/tests/**/*.py" = ["N802", "N803"]    # same — Phase 4 tests
+"airflow/dags/**/*.py" = ["E402"]               # DAG files often import after sys.path fiddling
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests"]
+testpaths = ["tests", "streaming/tests"]
 python_files = "test_*.py"
 addopts = [
     "-ra",
     "--strict-markers",
     "--cov=transformations",
+    "--cov=streaming",
     "--cov-report=term-missing",
     "--cov-report=xml",
+    # Phase 4: skip integration tests by default. Run them explicitly via
+    # `pytest -m integration` or `make test-streaming-integration`. Pass
+    # `-m ''` (empty marker filter) to run everything (used by `make test-all`).
+    "-m", "not integration",
 ]
 markers = [
     "unit: pure-function tests, no external services",
@@ -58,7 +65,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["transformations"]
+source = ["transformations", "streaming"]
 omit = ["*/tests/*", "*/__init__.py"]
 
 [tool.coverage.report]
