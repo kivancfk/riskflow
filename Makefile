@@ -86,8 +86,8 @@ run-streaming:
 
 test: test-unit dbt-test
 
-test-unit:
-	docker compose exec airflow pytest tests/unit -v
+#test-unit:
+#	docker compose exec airflow pytest tests/unit -v
 
 test-integration:
 	docker compose exec airflow pytest tests/integration -v
@@ -260,3 +260,84 @@ pg-row-counts:
 		 SELECT 'gold.gold_transaction_velocity_features', COUNT(*) FROM gold.gold_transaction_velocity_features \
 		 UNION ALL \
 		 SELECT 'gold.gold_pipeline_quality_summary',     COUNT(*) FROM gold.gold_pipeline_quality_summary;"
+# ============================================================
+# Phase 4 — Kafka streaming targets
+#
+# Append to your existing Makefile.
+# All target names are unique (no overlap with Phase 0/2/3 targets).
+# ============================================================
+
+.PHONY: streaming-init-topic streaming-up streaming-down \
+        streaming-watch-db streaming-watch-log streaming-reset \
+        test test-unit test-streaming-integration test-all
+
+# Idempotent topic creation. Phase 4 owns this — Phase 0 only brought up
+# the broker, not the topic. Re-running is a no-op (--if-not-exists).
+streaming-init-topic:
+	docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh \
+		--bootstrap-server kafka:9092 \
+		--create --if-not-exists \
+		--topic riskflow.transactions \
+		--partitions 3 --replication-factor 1
+	@echo "✅ topic riskflow.transactions ready"
+
+# Start producer + consumer.
+# By default truncates streaming_alerts first (so demo runs are clean).
+# Override with `KEEP=1 make streaming-up` to preserve previous alerts.
+streaming-up: streaming-init-topic
+ifndef KEEP
+	@$(MAKE) streaming-reset
+endif
+	docker compose up -d streaming-producer streaming-consumer
+	@echo ""
+	@echo "✅ streaming pipeline started"
+	@echo ""
+	@echo "Watch in two terminals:"
+	@echo "  pane 1: make streaming-watch-db"
+	@echo "  pane 2: make streaming-watch-log"
+
+streaming-down:
+	docker compose stop streaming-producer streaming-consumer
+	docker compose rm -f streaming-producer streaming-consumer
+
+# Pane 1: live alert count + most-recent timestamp
+streaming-watch-db:
+	watch -n 1 'docker compose exec -T postgres psql -U riskflow -d riskflow -c \
+		"SELECT count(*) AS alerts, max(flagged_at) AS latest \
+		 FROM public.streaming_alerts;"'
+
+# Pane 2: tail consumer logs
+streaming-watch-log:
+	docker compose logs -f --tail=50 streaming-consumer
+
+# Truncate alerts. Used by streaming-up by default; can also be invoked
+# manually between demo runs.
+streaming-reset:
+	docker compose exec -T postgres psql -U riskflow -d riskflow \
+		-c "TRUNCATE public.streaming_alerts;"
+	@echo "✅ streaming_alerts truncated"
+
+# ============================================================
+# Test split — fast unit tests by default, integration on demand.
+# Integration tests are gated by pytest marker (see pyproject.toml).
+# ============================================================
+
+test-unit:
+	docker compose exec -T airflow bash -c \
+		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m 'not integration'"
+
+test-streaming-integration:
+	docker compose exec -T \
+		-e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+		-e "PG_DSN=host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow" \
+		airflow bash -c \
+		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m integration"
+# Both — useful in CI
+test-all:
+	docker compose exec -T \
+		-e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+		-e "PG_DSN=host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow" \
+		airflow bash -c \
+		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m ''"
+# Convenience alias — `make test` does the same thing as `make test-all`.
+test: test-all
