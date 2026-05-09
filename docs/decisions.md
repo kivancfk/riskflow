@@ -105,6 +105,53 @@ separate. Document the unified design in README §12 as a future improvement.
 
 ---
 
+## ADR-006 — Phase 4 streaming uses kafka-python, not Spark Structured Streaming
+
+**Date:** 2026-05-05
+**Status:** Accepted
+
+**Context.** Earlier roadmap and README diagrams showed Phase 4 as a Spark
+Structured Streaming consumer reading from Kafka and writing to a
+`bronze_streaming/` Parquet location, watermarked. As Phase 4 design work
+progressed it became clear this was the wrong fit for the actual Phase 4 *goal*
+(demonstrating real-time fraud-decisioning patterns) and for the available
+*time* (4-day window). Spark Structured Streaming's state-store config,
+checkpoint locations, and watermark mechanics are not relevant to demonstrating
+fraud-detection logic, and would realistically consume 5–7 days including debugging.
+
+**Decision.** Phase 4 uses `kafka-python` directly:
+- `streaming/producer.py` replays silver Parquet to topic `riskflow.transactions`,
+  with deterministic SHA-256-prefix `transaction_id`s and an opt-in `DEMO_BURST` mode.
+- `streaming/consumer.py` reads the topic, maintains a bounded in-memory deque
+  per customer, applies a pure-function velocity rule, and writes flagged events
+  to `public.streaming_alerts` via `INSERT ... ON CONFLICT DO NOTHING`.
+- Output is operational (`public.streaming_alerts`), not analytical
+  (`bronze_streaming/` Parquet does not exist in Phase 4).
+
+Spark Structured Streaming is documented as the production extension. The pure-
+function rule (`streaming.fraud_rule.evaluate_velocity_rule`) is the only piece
+that survives a future Spark/Flink rewrite unchanged.
+
+**Consequences.**
+- (+) Phase 4 ships in 4 days with a credible demo.
+- (+) Producer/consumer are short, readable, debuggable (~150 lines each).
+- (+) At-least-once Kafka delivery + idempotent sink (UNIQUE constraint on
+  `(transaction_id, rule_name)`) = effectively-once outcomes.
+- (+) Interview talking point: *"Python for clarity at this scale; in production
+  I'd use Spark Structured Streaming or Flink for checkpointed state and
+  horizontal scaling."*
+- (−) State (per-customer deques) is lost on consumer restart. Acceptable for
+  Phase 4; production would use RocksDB-backed state with checkpointing.
+- (−) Single-process consumer cannot scale horizontally — irrelevant at our
+  100 msg/sec demo rate, blocking at production throughput.
+
+**Relationship to ADR-005.** ADR-005 is *not* superseded — it remains the
+intended design for Phase 5+ when Spark Structured Streaming is reintroduced
+and `bronze_streaming/` becomes load-bearing. ADR-006 narrows Phase 4's scope:
+no `bronze_streaming/` in this phase, only `public.streaming_alerts`.
+
+---
+
 <!--
 When making a new architectural decision during build, append a new ADR
 above this line. Don't edit existing ADRs — superseded decisions should
