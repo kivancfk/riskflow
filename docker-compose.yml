@@ -41,6 +41,7 @@ x-airflow-common: &airflow-common
     - ./scripts:/opt/airflow/scripts
     - ./tests:/opt/airflow/tests
     - ./streaming:/opt/airflow/streaming
+    - ./pyproject.toml:/opt/airflow/pyproject.toml:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on: &airflow-common-depends-on
     postgres:
@@ -132,6 +133,7 @@ services:
       - ./spark/jobs:/opt/spark_jobs
       - ./transformations:/opt/transformations
       - ./data:/opt/data
+      - ./pyproject.toml:/opt/spark/pyproject.toml:ro
     restart: unless-stopped
 
   spark-worker:
@@ -157,6 +159,7 @@ services:
       - ./spark/jobs:/opt/spark_jobs
       - ./transformations:/opt/transformations
       - ./data:/opt/data
+      - ./pyproject.toml:/opt/spark/pyproject.toml:ro
     restart: unless-stopped
 
   # ---------------------------------------------------------------------
