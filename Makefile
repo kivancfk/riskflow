@@ -4,7 +4,7 @@
 
 .PHONY: help up down init logs ps clean \
         split-data run-day run-streaming \
-        test test-unit test-integration \
+        test test-unit test-spark-integration \
         dbt-run dbt-test dbt-docs \
         ge-validate \
         lint format
@@ -29,7 +29,7 @@ help:
 	@echo "Quality:"
 	@echo "  make test               Pytest + dbt test"
 	@echo "  make test-unit          Pytest unit tests only"
-	@echo "  make test-integration   Pytest integration tests only"
+	@echo "  make test-spark-integration   Pytest integration tests only"
 	@echo "  make dbt-run            Run all dbt models"
 	@echo "  make dbt-test           Run all dbt tests"
 	@echo "  make dbt-docs           Generate and serve dbt docs"
@@ -84,12 +84,7 @@ run-streaming:
 
 # ---------- Quality ----------
 
-test: test-unit dbt-test
-
-#test-unit:
-#	docker compose exec airflow pytest tests/unit -v
-
-test-integration:
+test-spark-integration:
 	docker compose exec airflow pytest tests/integration -v
 
 dbt-run:
@@ -324,20 +319,20 @@ streaming-reset:
 
 test-unit:
 	docker compose exec -T airflow bash -c \
-		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m 'not integration'"
+		"cd /opt/airflow && pytest -m 'not integration'"
 
 test-streaming-integration:
 	docker compose exec -T \
 		-e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
 		-e "PG_DSN=host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow" \
 		airflow bash -c \
-		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m integration"
+		"cd /opt/airflow && pytest -m integration"
 # Both — useful in CI
 test-all:
 	docker compose exec -T \
 		-e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
 		-e "PG_DSN=host=postgres port=5432 dbname=riskflow user=riskflow password=riskflow" \
 		airflow bash -c \
-		"cd /opt/airflow && pytest --ignore=tests/integration/test_bronze_ingest.py -m ''"
+		"cd /opt/airflow && pytest -m ''"
 # Convenience alias — `make test` does the same thing as `make test-all`.
 test: test-all
