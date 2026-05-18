@@ -10,9 +10,9 @@ sources:
         columns:
           - name: load_date
             description: "Partition date (one CSV file per day)."
-          - name: nameOrig
+          - name: name_orig
             description: "Origin customer ID."
-          - name: nameDest
+          - name: name_dest
             description: "Destination customer/merchant ID."
           - name: amount
             description: "Transaction amount in PaySim's synthetic currency."

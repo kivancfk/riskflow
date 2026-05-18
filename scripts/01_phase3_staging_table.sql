@@ -19,12 +19,12 @@ CREATE TABLE IF NOT EXISTS staging.silver_transactions (
     step                INTEGER,
     type                VARCHAR(16),
     amount              NUMERIC(18, 2),
-    "nameOrig"          VARCHAR(32),
-    "oldbalanceOrg"     NUMERIC(18, 2),
-    "newbalanceOrig"    NUMERIC(18, 2),
-    "nameDest"          VARCHAR(32),
-    "oldbalanceDest"    NUMERIC(18, 2),
-    "newbalanceDest"    NUMERIC(18, 2),
+    name_orig           VARCHAR(32),
+    old_balance_orig    NUMERIC(18, 2),
+    new_balance_orig    NUMERIC(18, 2),
+    name_dest           VARCHAR(32),
+    old_balance_dest    NUMERIC(18, 2),
+    new_balance_dest    NUMERIC(18, 2),
     _load_ts            TIMESTAMP,
     _source_file        VARCHAR(64),
     _run_id             VARCHAR(128),
@@ -41,14 +41,14 @@ CREATE INDEX IF NOT EXISTS idx_silver_load_date
     ON staging.silver_transactions(load_date);
 
 CREATE INDEX IF NOT EXISTS idx_silver_name_orig
-    ON staging.silver_transactions("nameOrig");
+    ON staging.silver_transactions(name_orig);
 
 CREATE INDEX IF NOT EXISTS idx_silver_type
     ON staging.silver_transactions(type);
 
 -- Composite index for velocity feature aggregations
 CREATE INDEX IF NOT EXISTS idx_silver_orig_date_hour
-    ON staging.silver_transactions("nameOrig", load_date, event_hour);
+    ON staging.silver_transactions(name_orig, load_date, event_hour);
 
 GRANT ALL ON SCHEMA staging      TO riskflow;
 GRANT ALL ON SCHEMA dbt_staging  TO riskflow;

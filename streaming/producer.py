@@ -146,13 +146,6 @@ def iter_silver_rows(silver_path: str) -> Iterator[dict]:
         log.info("reading partition %s", part.name)
         dataset = ds.dataset(str(part), format="parquet")
         df = dataset.to_table().to_pandas()
-        # Silver currently inherits PaySim's camelCase for these two columns.
-        # rename() silently skips missing keys, so this is a no-op when/if
-        # Phase 2's silver writer is normalized later. See ADR-006 follow-ups.
-        df = df.rename(columns={
-            "nameOrig": "name_orig",
-            "nameDest": "name_dest",
-        })
         df = df.sort_values(["name_orig", "step"], kind="mergesort")
         source_file = part.name
 
