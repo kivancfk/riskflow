@@ -82,6 +82,47 @@ def _sample_row(**overrides) -> dict:
     return base
 
 
+def _silver_intermediate_schema() -> T.StructType:
+    """Schema as it looks AFTER cast_financial_columns has run.
+
+    The six PaySim camelCase columns are renamed to snake_case (with the
+    `Org` -> `orig` typo corrected), and isFraud/isFlaggedFraud are dropped
+    in favor of boolean is_fraud/is_flagged_fraud. Used as input to the
+    functions that run downstream of cast_financial_columns:
+    derive_event_columns, deduplicate_transactions,
+    enforce_not_null_constraints.
+    """
+    return T.StructType([
+        T.StructField("step",               T.IntegerType(), nullable=False),
+        T.StructField("type",               T.StringType(),  nullable=False),
+        T.StructField("amount",             T.DoubleType(),  nullable=False),
+        T.StructField("name_orig",          T.StringType(),  nullable=False),
+        T.StructField("old_balance_orig",   T.DoubleType(),  nullable=True),
+        T.StructField("new_balance_orig",   T.DoubleType(),  nullable=True),
+        T.StructField("name_dest",          T.StringType(),  nullable=False),
+        T.StructField("old_balance_dest",   T.DoubleType(),  nullable=True),
+        T.StructField("new_balance_dest",   T.DoubleType(),  nullable=True),
+        T.StructField("is_fraud",           T.BooleanType(), nullable=False),
+        T.StructField("is_flagged_fraud",   T.BooleanType(), nullable=False),
+        T.StructField("_load_ts",           T.TimestampType(), nullable=True),
+        T.StructField("_source_file",       T.StringType(),  nullable=True),
+        T.StructField("_run_id",            T.StringType(),  nullable=True),
+    ])
+
+
+def _silver_intermediate_row(**overrides) -> dict:
+    """Row dict matching _silver_intermediate_schema()."""
+    base = {
+        "step": 1, "type": "PAYMENT", "amount": 100.0,
+        "name_orig": "C001", "old_balance_orig": 1000.0, "new_balance_orig": 900.0,
+        "name_dest": "M001", "old_balance_dest": 0.0, "new_balance_dest": 0.0,
+        "is_fraud": False, "is_flagged_fraud": False,
+        "_load_ts": None, "_source_file": "day_07.csv", "_run_id": "run-1",
+    }
+    base.update(overrides)
+    return base
+
+
 # ---------------------------------------------------------------
 # cast_financial_columns
 # ---------------------------------------------------------------
@@ -127,8 +168,8 @@ class TestCastFinancialColumns:
         df = spark.createDataFrame([_sample_row()], schema=_bronze_schema())
         result = cast_financial_columns(df)
         for col in (
-            "amount", "oldbalanceOrg", "newbalanceOrig",
-            "oldbalanceDest", "newbalanceDest",
+            "amount", "old_balance_orig", "new_balance_orig",
+            "old_balance_dest", "new_balance_dest",
         ):
             assert isinstance(result.schema[col].dataType, T.DecimalType), (
                 f"{col} should be DecimalType"
@@ -140,7 +181,7 @@ class TestCastFinancialColumns:
 # ---------------------------------------------------------------
 class TestDeriveEventColumns:
     def test_three_new_columns_added(self, spark: SparkSession) -> None:
-        df = spark.createDataFrame([_sample_row()], schema=_bronze_schema())
+        df = spark.createDataFrame([_silver_intermediate_row()], schema=_silver_intermediate_schema())
         result = derive_event_columns(df)
         for col in ("event_hour", "balance_delta_orig", "balance_delta_dest"):
             assert col in result.columns
@@ -152,23 +193,23 @@ class TestDeriveEventColumns:
         self, spark: SparkSession, step: int, expected_hour: int,
     ) -> None:
         df = spark.createDataFrame(
-            [_sample_row(step=step)], schema=_bronze_schema(),
+            [_silver_intermediate_row(step=step)], schema=_silver_intermediate_schema(),
         )
         row = derive_event_columns(df).collect()[0]
         assert row["event_hour"] == expected_hour
 
     def test_balance_delta_orig_formula(self, spark: SparkSession) -> None:
         df = spark.createDataFrame(
-            [_sample_row(oldbalanceOrg=1000.0, newbalanceOrig=900.0)],
-            schema=_bronze_schema(),
+            [_silver_intermediate_row(old_balance_orig=1000.0, new_balance_orig=900.0)],
+            schema=_silver_intermediate_schema(),
         )
         row = derive_event_columns(df).collect()[0]
         assert float(row["balance_delta_orig"]) == pytest.approx(-100.0)
 
     def test_balance_delta_dest_formula(self, spark: SparkSession) -> None:
         df = spark.createDataFrame(
-            [_sample_row(oldbalanceDest=0.0, newbalanceDest=100.0)],
-            schema=_bronze_schema(),
+            [_silver_intermediate_row(old_balance_dest=0.0, new_balance_dest=100.0)],
+            schema=_silver_intermediate_schema(),
         )
         row = derive_event_columns(df).collect()[0]
         assert float(row["balance_delta_dest"]) == pytest.approx(100.0)
@@ -179,20 +220,20 @@ class TestDeriveEventColumns:
 # ---------------------------------------------------------------
 class TestDeduplicateTransactions:
     def test_exact_duplicate_removed(self, spark: SparkSession) -> None:
-        row = _sample_row()
-        df = spark.createDataFrame([row, row], schema=_bronze_schema())
+        row = _silver_intermediate_row()
+        df = spark.createDataFrame([row, row], schema=_silver_intermediate_schema())
         result = deduplicate_transactions(df)
         assert result.count() == 1
 
     def test_different_transactions_kept(self, spark: SparkSession) -> None:
         df = spark.createDataFrame(
-            [_sample_row(step=1), _sample_row(step=2)],
-            schema=_bronze_schema(),
+            [_silver_intermediate_row(step=1), _silver_intermediate_row(step=2)],
+            schema=_silver_intermediate_schema(),
         )
         assert deduplicate_transactions(df).count() == 2
 
     def test_no_dedup_rank_column_in_output(self, spark: SparkSession) -> None:
-        df = spark.createDataFrame([_sample_row()], schema=_bronze_schema())
+        df = spark.createDataFrame([_silver_intermediate_row()], schema=_silver_intermediate_schema())
         result = deduplicate_transactions(df)
         assert "_dedup_rank" not in result.columns
 
@@ -202,7 +243,7 @@ class TestDeduplicateTransactions:
 # ---------------------------------------------------------------
 class TestEnforceNotNullConstraints:
     def test_clean_row_goes_to_clean(self, spark: SparkSession) -> None:
-        df = spark.createDataFrame([_sample_row()], schema=_bronze_schema())
+        df = spark.createDataFrame([_silver_intermediate_row()], schema=_silver_intermediate_schema())
         clean, quarantine = enforce_not_null_constraints(df)
         assert clean.count() == 1
         assert quarantine.count() == 0
@@ -213,9 +254,9 @@ class TestEnforceNotNullConstraints:
         nullable = T.StructType([
             f if f.name != "step"
             else T.StructField("step", T.IntegerType(), nullable=True)
-            for f in _bronze_schema().fields
+            for f in _silver_intermediate_schema().fields
         ])
-        row = _sample_row()
+        row = _silver_intermediate_row()
         row["step"] = None
         df = spark.createDataFrame([row], schema=nullable)
         clean, quarantine = enforce_not_null_constraints(df)
@@ -224,7 +265,7 @@ class TestEnforceNotNullConstraints:
 
     def test_non_positive_amount_quarantined(self, spark: SparkSession) -> None:
         df = spark.createDataFrame(
-            [_sample_row(amount=0.0)], schema=_bronze_schema(),
+            [_silver_intermediate_row(amount=0.0)], schema=_silver_intermediate_schema(),
         )
         clean, quarantine = enforce_not_null_constraints(df)
         assert clean.count() == 0
@@ -234,9 +275,9 @@ class TestEnforceNotNullConstraints:
         nullable = T.StructType([
             f if f.name != "step"
             else T.StructField("step", T.IntegerType(), nullable=True)
-            for f in _bronze_schema().fields
+            for f in _silver_intermediate_schema().fields
         ])
-        row = _sample_row()
+        row = _silver_intermediate_row()
         row["step"] = None
         df = spark.createDataFrame([row], schema=nullable)
         _, quarantine = enforce_not_null_constraints(df)
@@ -246,10 +287,10 @@ class TestEnforceNotNullConstraints:
         nullable = T.StructType([
             f if f.name != "step"
             else T.StructField("step", T.IntegerType(), nullable=True)
-            for f in _bronze_schema().fields
+            for f in _silver_intermediate_schema().fields
         ])
-        good = _sample_row()
-        bad = _sample_row(step=None)
+        good = _silver_intermediate_row()
+        bad = _silver_intermediate_row(step=None)
         df = spark.createDataFrame([good, bad], schema=nullable)
         clean, quarantine = enforce_not_null_constraints(df)
         assert clean.count() == 1

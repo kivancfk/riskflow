@@ -39,8 +39,8 @@ log = logging.getLogger("silver_transform")
 
 # Constants used by both the job and the test suite
 TRANSACTION_TYPES = {"PAYMENT", "TRANSFER", "CASH_OUT", "CASH_IN", "DEBIT"}
-DEDUP_KEY = ["nameOrig", "nameDest", "step", "amount"]
-REQUIRED_FIELDS = ["step", "type", "amount", "nameOrig", "nameDest"]
+DEDUP_KEY = ["name_orig", "name_dest", "step", "amount"]
+REQUIRED_FIELDS = ["step", "type", "amount", "name_orig", "name_dest"]
 
 
 # ---------------------------------------------------------------
@@ -55,15 +55,30 @@ def cast_financial_columns(df: DataFrame) -> DataFrame:
     layer's snake_case convention; bronze keeps the original camelCase
     from PaySim's source CSV.
     """
-    decimal_cols = [
+    # Cast financial DOUBLE columns to DECIMAL(18,2) on the bronze (camelCase) names,
+    # then rename to snake_case as part of the silver-layer convention.
+    bronze_decimal_cols = [
         "amount", "oldbalanceOrg", "newbalanceOrig",
         "oldbalanceDest", "newbalanceDest",
     ]
     result = df
-    for col in decimal_cols:
+    for col in bronze_decimal_cols:
         result = result.withColumn(col, F.col(col).cast(T.DecimalType(18, 2)))
 
-    # Rename + cast in a single pass
+    # Rename bronze camelCase -> silver snake_case (also corrects PaySim's
+    # `oldbalanceOrg` typo to `old_balance_orig`).
+    bronze_to_silver = {
+        "nameOrig":       "name_orig",
+        "nameDest":       "name_dest",
+        "oldbalanceOrg":  "old_balance_orig",
+        "newbalanceOrig": "new_balance_orig",
+        "oldbalanceDest": "old_balance_dest",
+        "newbalanceDest": "new_balance_dest",
+    }
+    for src, dst in bronze_to_silver.items():
+        result = result.withColumnRenamed(src, dst)
+
+    # Rename + cast isFraud / isFlaggedFraud in a single pass
     result = (
         result
         .withColumn("is_fraud",         F.col("isFraud").cast(T.BooleanType()))
@@ -77,8 +92,8 @@ def derive_event_columns(df: DataFrame) -> DataFrame:
     """Add three derived columns used by gold layer aggregations.
 
     event_hour:         hour-of-day (0–23) from PaySim's step counter.
-    balance_delta_orig: newbalanceOrig - oldbalanceOrg.
-    balance_delta_dest: newbalanceDest - oldbalanceDest.
+    balance_delta_orig: new_balance_orig - old_balance_orig.
+    balance_delta_dest: new_balance_dest - old_balance_dest.
     """
     return (
         df
@@ -88,12 +103,12 @@ def derive_event_columns(df: DataFrame) -> DataFrame:
         )
         .withColumn(
             "balance_delta_orig",
-            (F.col("newbalanceOrig") - F.col("oldbalanceOrg"))
+            (F.col("new_balance_orig") - F.col("old_balance_orig"))
             .cast(T.DecimalType(18, 2)),
         )
         .withColumn(
             "balance_delta_dest",
-            (F.col("newbalanceDest") - F.col("oldbalanceDest"))
+            (F.col("new_balance_dest") - F.col("old_balance_dest"))
             .cast(T.DecimalType(18, 2)),
         )
     )
