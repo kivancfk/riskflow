@@ -237,6 +237,119 @@ def transform(
     return silver_count, quarantine_count
 
 
+def transform_multi(
+    spark: SparkSession,
+    *,
+    bronze_dir: Path,
+    silver_dir: Path,
+    quarantine_dir: Path,
+    load_dates: list[str],
+    load_ts: str,
+    run_id: str,
+) -> tuple[int, int]:
+    """Run bronze→silver across N load_dates in a single Spark session.
+
+    Phase 5 Day 2 fix: the perf harness was previously invoking this
+    script once per load_date, paying ~25-30s of JVM cold start + driver
+    handshake on every invocation. For the Large scale (30 partitions)
+    that was ~900s of pure overhead before any actual work happened.
+
+    This function reads all N partitions in one `spark.read.parquet(...,
+    basePath=...)` call. Spark infers `load_date` from the directory
+    names (so we don't add a literal), parallelizes the scans across
+    its executors, and writes back with `partitionBy("load_date")` to
+    the same Hive-style layout.
+
+    Semantics are otherwise identical to `transform()` — same cast,
+    same derives, same dedup key, same null/range rejection rules.
+    Single-date callers (the Airflow DAG, the parity test, unit tests)
+    should keep using `transform()` for backward compatibility.
+
+    Returns:
+        (silver_row_count, quarantine_row_count) summed across dates.
+    """
+    if not load_dates:
+        raise ValueError("transform_multi requires at least one load_date")
+
+    # Build the explicit list of partition paths. We pass them
+    # individually rather than using a glob so a typo in one date
+    # surfaces as a clean "path not found" rather than silently
+    # reading nothing.
+    partition_paths = [
+        f"{bronze_dir}/load_date={d}" for d in load_dates
+    ]
+    log.info(
+        "Reading %d bronze partitions in one Spark session (basePath=%s)",
+        len(load_dates), bronze_dir,
+    )
+
+    # basePath is what tells Spark "the partition columns live in the
+    # directory names rooted here" — without it, Spark would not
+    # hydrate `load_date` as a column when reading individual leaf
+    # partition paths. With it, `load_date` is read directly from the
+    # directory name per row, which is the source of truth for which
+    # date each row belongs to.
+    df = (
+        spark.read
+        .option("basePath", str(bronze_dir))
+        .parquet(*partition_paths)
+    )
+    bronze_count = df.count()
+    log.info("Bronze rows read across %d partitions: %s",
+             len(load_dates), f"{bronze_count:,}")
+
+    # We DO NOT drop and re-derive load_date here. Spark's partition
+    # discovery already hydrated it correctly from the directory name.
+    # An earlier draft re-derived load_date from _load_ts on the
+    # theory that _load_ts and partition date are consistent in real
+    # bronze — they are, but tying the partition column to data
+    # semantics is fragile (a clock skew or a backfill could break
+    # it) and re-derivation provides zero benefit when the right
+    # value is already in hand from the directory structure.
+
+    df = cast_financial_columns(df)
+    df = derive_event_columns(df)
+    df = deduplicate_transactions(df)
+
+    clean_df, quarantine_df = enforce_not_null_constraints(df)
+
+    silver_count = clean_df.count()
+    quarantine_count = quarantine_df.count()
+    log.info(
+        "After dedup + validation across %d partitions: silver=%s quarantine=%s",
+        len(load_dates), f"{silver_count:,}", f"{quarantine_count:,}",
+    )
+
+    # Dynamic mode is critical here: with N partitions written from
+    # the same DataFrame, we want overwrite semantics scoped to the
+    # partitions actually present in the write, not "blow away the
+    # whole silver_dir".
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+
+    log.info("Writing silver to %s (partitioned by load_date)", silver_dir)
+    (
+        clean_df.write
+        .mode("overwrite")
+        .partitionBy("load_date")
+        .parquet(str(silver_dir))
+    )
+
+    if quarantine_count > 0:
+        log.info(
+            "Writing %s quarantine rows to %s (partitioned by load_date)",
+            f"{quarantine_count:,}", quarantine_dir,
+        )
+        (
+            quarantine_df.write
+            .mode("overwrite")
+            .partitionBy("load_date")
+            .parquet(str(quarantine_dir))
+        )
+
+    log.info("Silver multi-partition transformation complete")
+    return silver_count, quarantine_count
+
+
 # ---------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------
@@ -245,7 +358,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--bronze-dir",     type=Path, required=True)
     p.add_argument("--silver-dir",     type=Path, required=True)
     p.add_argument("--quarantine-dir", type=Path, required=True)
-    p.add_argument("--load-date",      type=str,  required=True)
+    # Exactly one of --load-date / --load-dates must be provided. We
+    # don't use a mutually-exclusive group with required=True because
+    # argparse's error messages there are worse than what we can write
+    # by hand; we validate in main() instead.
+    p.add_argument(
+        "--load-date", type=str, default=None,
+        help="Single ISO date YYYY-MM-DD. Backward-compatible — used "
+             "by the Phase 2 Airflow DAG and the parity test.",
+    )
+    p.add_argument(
+        "--load-dates", type=str, default=None,
+        help="Comma-separated ISO dates, e.g. 2026-04-01,2026-04-02,... "
+             "Used by the Phase 5 perf harness to process N partitions "
+             "in one Spark session.",
+    )
     p.add_argument("--load-ts",        type=str,  required=True)
     p.add_argument("--run-id",         type=str,  required=True)
     return p.parse_args(argv)
@@ -254,23 +381,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
+    # Validate the one-of constraint by hand for a clean error message.
+    if (args.load_date is None) == (args.load_dates is None):
+        log.error(
+            "Exactly one of --load-date or --load-dates must be specified."
+        )
+        return 2
+
+    if args.load_dates is not None:
+        load_dates = [d.strip() for d in args.load_dates.split(",") if d.strip()]
+        if not load_dates:
+            log.error("--load-dates was empty after parsing")
+            return 2
+        app_suffix = f"multi_{len(load_dates)}dates"
+    else:
+        load_dates = [args.load_date]
+        app_suffix = args.load_date
+
     spark = (
         SparkSession.builder
-        .appName(f"riskflow_silver_transform__{args.load_date}")
+        .appName(f"riskflow_silver_transform__{app_suffix}")
         .config("spark.sql.adaptive.enabled", "true")
         .getOrCreate()
     )
 
     try:
-        silver_count, quarantine_count = transform(
-            spark,
-            bronze_dir=args.bronze_dir,
-            silver_dir=args.silver_dir,
-            quarantine_dir=args.quarantine_dir,
-            load_date=args.load_date,
-            load_ts=args.load_ts,
-            run_id=args.run_id,
-        )
+        if len(load_dates) == 1:
+            # Backward-compatible single-date path. Same call shape the
+            # Airflow DAG and parity test have always used.
+            silver_count, quarantine_count = transform(
+                spark,
+                bronze_dir=args.bronze_dir,
+                silver_dir=args.silver_dir,
+                quarantine_dir=args.quarantine_dir,
+                load_date=load_dates[0],
+                load_ts=args.load_ts,
+                run_id=args.run_id,
+            )
+        else:
+            silver_count, quarantine_count = transform_multi(
+                spark,
+                bronze_dir=args.bronze_dir,
+                silver_dir=args.silver_dir,
+                quarantine_dir=args.quarantine_dir,
+                load_dates=load_dates,
+                load_ts=args.load_ts,
+                run_id=args.run_id,
+            )
     except Exception:
         log.exception("Silver transformation failed unexpectedly")
         return 1
