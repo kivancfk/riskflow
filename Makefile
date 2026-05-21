@@ -336,3 +336,51 @@ test-all:
 		"cd /opt/airflow && pytest -m ''"
 # Convenience alias — `make test` does the same thing as `make test-all`.
 test: test-all
+# ============================================================
+# Phase 5 — Performance benchmarking targets
+#
+# Append to your existing Makefile.
+# All target names are unique (no overlap with Phase 0/2/3/4 targets).
+# ============================================================
+#
+# Per docs/performance.md §9, the harness runs on the host (psutil
+# access, OS-level timing). The PySpark workload runs inside the
+# existing Docker stack via `docker compose exec`. Pandas runs on the
+# host directly. Pass 0 (this file) introduces:
+#
+#   perf-baseline   — pandas vs PySpark at small/medium/large scales
+#   perf-all        — every Phase 5 benchmark (today: just perf-baseline)
+#
+# Variables (overridable from CLI):
+#   PERF_RUNS=3          measured runs per (scale, implementation)
+#   PERF_WARMUP=1        discarded warmup runs per (scale, implementation)
+#   PERF_SCALES=small,medium,large
+#   PERF_IMPLS=pandas,pyspark
+#
+# Example debugging incantation (fast):
+#   make perf-baseline PERF_RUNS=1 PERF_WARMUP=0 PERF_SCALES=small
+#
+# Days 3-5 will add perf-partitioning, perf-broadcast, perf-skew.
+# ============================================================
+
+.PHONY: perf-baseline perf-all
+
+PERF_RUNS    ?= 3
+PERF_WARMUP  ?= 1
+PERF_SCALES  ?= small,medium,large
+PERF_IMPLS   ?= pandas,pyspark
+
+perf-baseline:
+	@echo "▶ Pass 0 — pandas vs PySpark baseline"
+	@echo "   runs=$(PERF_RUNS) warmup=$(PERF_WARMUP) scales=$(PERF_SCALES) impls=$(PERF_IMPLS)"
+	python scripts/perf_harness.py baseline \
+	  --runs       $(PERF_RUNS) \
+	  --warmup     $(PERF_WARMUP) \
+	  --scales     $(PERF_SCALES) \
+	  --implementations $(PERF_IMPLS)
+
+# perf-all is the umbrella target. On Day 2 it's a thin wrapper around
+# perf-baseline; Days 3-5 will add perf-partitioning, perf-broadcast,
+# and perf-skew as additional prerequisites.
+perf-all: perf-baseline
+	@echo "✅ Phase 5 perf-all complete (Day 2: perf-baseline only)"
